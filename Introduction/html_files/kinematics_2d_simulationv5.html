@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2D Kinematics Visualization</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+                'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+                sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // Lucide icons as inline SVG components
+        const Play = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+        );
+
+        const Pause = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="6" y="4" width="4" height="16"></rect>
+                <rect x="14" y="4" width="4" height="16"></rect>
+            </svg>
+        );
+
+        const RotateCcw = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="1 4 1 10 7 10"></polyline>
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+            </svg>
+        );
+
+        const Kinematics2D = () => {
+            const [isPlaying, setIsPlaying] = useState(false);
+            const [time, setTime] = useState(0);
+            const [history, setHistory] = useState([]);
+            const [currentProfile, setCurrentProfile] = useState(null);
+            const animationRef = useRef(null);
+            const startTimeRef = useRef(null);
+            
+            // Simulation parameters
+            const duration = 10; // seconds
+            const dt = 0.016; // ~60fps
+            
+            // Define 2D motion profiles - all stay within 0-250 range for both x and y
+            const motionProfiles = [
+                {
+                    name: "Projectile Motion",
+                    description: "Classic parabolic trajectory with gravity (bounces at floor)",
+                    getX: (t) => 30 + 20 * t,
+                    getY: (t) => {
+                        // Start at y=180, fall with gravity
+                        const y0 = 180;
+                        const vy0 = 0;
+                        const g = 10;
+                        
+                        let y = y0 + vy0 * t - 0.5 * g * t * t;
+                        
+                        // Calculate when it hits ground (y=0)
+                        const tBounce1 = Math.sqrt(2 * y0 / g); // ~6s
+                        
+                        if (t > tBounce1) {
+                            // After first bounce
+                            const restitution = 0.75; // coefficient of restitution
+                            const vBounce1 = g * tBounce1; // velocity just before bounce
+                            const vAfterBounce1 = restitution * vBounce1;
+                            const tSinceBounce = t - tBounce1;
+                            
+                            y = vAfterBounce1 * tSinceBounce - 0.5 * g * tSinceBounce * tSinceBounce;
+                            
+                            // Check for second bounce
+                            const tToSecondBounce = 2 * vAfterBounce1 / g;
+                            if (tSinceBounce > tToSecondBounce) {
+                                const tBounce2 = tBounce1 + tToSecondBounce;
+                                const vBounce2 = restitution * vAfterBounce1;
+                                const tSinceBounce2 = t - tBounce2;
+                                y = vBounce2 * tSinceBounce2 - 0.5 * g * tSinceBounce2 * tSinceBounce2;
+                            }
+                            
+                            y = Math.max(0, y);
+                        }
+                        
+                        return y;
+                    },
+                    getVx: (t) => 20,
+                    getVy: (t) => {
+                        const y0 = 180;
+                        const g = 10;
+                        const tBounce1 = Math.sqrt(2 * y0 / g);
+                        
+                        if (t < tBounce1) {
+                            return -g * t;
+                        } else {
+                            const restitution = 0.75;
+                            const vBounce1 = g * tBounce1;
+                            const vAfterBounce1 = restitution * vBounce1;
+                            const tSinceBounce = t - tBounce1;
+                            
+                            const tToSecondBounce = 2 * vAfterBounce1 / g;
+                            if (tSinceBounce > tToSecondBounce) {
+                                const vBounce2 = restitution * vAfterBounce1;
+                                const tBounce2 = tBounce1 + tToSecondBounce;
+                                const tSinceBounce2 = t - tBounce2;
+                                const vy = vBounce2 - g * tSinceBounce2;
+                                return Math.max(vy, -vBounce2);
+                            } else {
+                                return vAfterBounce1 - g * tSinceBounce;
+                            }
+                        }
+                    },
+                    getAx: (t) => 0,
+                    getAy: (t) => -10,
+                    color: "#3b82f6"
+                },
+                {
+                    name: "Circular Motion",
+                    description: "Uniform circular motion with constant speed",
+                    getX: (t) => 125 + 70 * Math.cos(0.6 * t),
+                    getY: (t) => 125 + 70 * Math.sin(0.6 * t),
+                    getVx: (t) => -42 * Math.sin(0.6 * t),
+                    getVy: (t) => 42 * Math.cos(0.6 * t),
+                    getAx: (t) => -25.2 * Math.cos(0.6 * t),
+                    getAy: (t) => -25.2 * Math.sin(0.6 * t),
+                    color: "#10b981"
+                },
+                {
+                    name: "Spiral Outward",
+                    description: "Expanding spiral motion",
+                    getX: (t) => 125 + (25 + 2.5 * t) * Math.cos(1.2 * t),
+                    getY: (t) => 125 + (25 + 2.5 * t) * Math.sin(1.2 * t),
+                    getVx: (t) => 2.5 * Math.cos(1.2 * t) - 1.2 * (25 + 2.5 * t) * Math.sin(1.2 * t),
+                    getVy: (t) => 2.5 * Math.sin(1.2 * t) + 1.2 * (25 + 2.5 * t) * Math.cos(1.2 * t),
+                    getAx: (t) => -5 * Math.sin(1.2 * t) - 1.44 * (25 + 2.5 * t) * Math.cos(1.2 * t),
+                    getAy: (t) => 5 * Math.cos(1.2 * t) - 1.44 * (25 + 2.5 * t) * Math.sin(1.2 * t),
+                    color: "#8b5cf6"
+                },
+                {
+                    name: "Damped Oscillation 2D",
+                    description: "2D oscillation with decay (spirals inward)",
+                    getX: (t) => 125 + 70 * Math.exp(-0.12 * t) * Math.cos(t),
+                    getY: (t) => 125 + 70 * Math.exp(-0.12 * t) * Math.sin(t),
+                    getVx: (t) => 70 * Math.exp(-0.12 * t) * (-Math.sin(t) - 0.12 * Math.cos(t)),
+                    getVy: (t) => 70 * Math.exp(-0.12 * t) * (Math.cos(t) - 0.12 * Math.sin(t)),
+                    getAx: (t) => 70 * Math.exp(-0.12 * t) * (-Math.cos(t) + 0.24 * Math.sin(t) + 0.0144 * Math.cos(t)),
+                    getAy: (t) => 70 * Math.exp(-0.12 * t) * (-Math.sin(t) - 0.24 * Math.cos(t) + 0.0144 * Math.sin(t)),
+                    color: "#f59e0b"
+                },
+                {
+                    name: "Diagonal Launch",
+                    description: "Projectile at 45° angle (bounces at floor)",
+                    getX: (t) => 30 + 18 * t,
+                    getY: (t) => {
+                        const y0 = 30;
+                        const vy0 = 18;
+                        const g = 10;
+                        
+                        let y = y0 + vy0 * t - 0.5 * g * t * t;
+                        
+                        // Calculate when it hits ground
+                        const discriminant = vy0 * vy0 + 2 * g * y0;
+                        const tBounce1 = (vy0 + Math.sqrt(discriminant)) / g;
+                        
+                        if (t > tBounce1) {
+                            const restitution = 0.7;
+                            const vBounce1 = vy0 - g * tBounce1;
+                            const vAfterBounce1 = -restitution * vBounce1;
+                            const tSinceBounce = t - tBounce1;
+                            
+                            y = vAfterBounce1 * tSinceBounce - 0.5 * g * tSinceBounce * tSinceBounce;
+                            y = Math.max(0, y);
+                        }
+                        
+                        return y;
+                    },
+                    getVx: (t) => 18,
+                    getVy: (t) => {
+                        const y0 = 30;
+                        const vy0 = 18;
+                        const g = 10;
+                        
+                        const discriminant = vy0 * vy0 + 2 * g * y0;
+                        const tBounce1 = (vy0 + Math.sqrt(discriminant)) / g;
+                        
+                        if (t < tBounce1) {
+                            return vy0 - g * t;
+                        } else {
+                            const restitution = 0.7;
+                            const vBounce1 = vy0 - g * tBounce1;
+                            const vAfterBounce1 = -restitution * vBounce1;
+                            const tSinceBounce = t - tBounce1;
+                            const vy = vAfterBounce1 - g * tSinceBounce;
+                            return Math.max(vy, -vAfterBounce1);
+                        }
+                    },
+                    getAx: (t) => 0,
+                    getAy: (t) => -10,
+                    color: "#ec4899"
+                },
+                {
+                    name: "Constant Velocity 2D",
+                    description: "Linear motion at constant velocity",
+                    getX: (t) => 40 + 14 * t,
+                    getY: (t) => 50 + 12 * t,
+                    getVx: (t) => 14,
+                    getVy: (t) => 12,
+                    getAx: (t) => 0,
+                    getAy: (t) => 0,
+                    color: "#06b6d4"
+                },
+                {
+                    name: "Elliptical Orbit",
+                    description: "Elliptical path with varying speed",
+                    getX: (t) => 125 + 95 * Math.cos(0.7 * t),
+                    getY: (t) => 125 + 60 * Math.sin(0.7 * t),
+                    getVx: (t) => -66.5 * Math.sin(0.7 * t),
+                    getVy: (t) => 42 * Math.cos(0.7 * t),
+                    getAx: (t) => -46.55 * Math.cos(0.7 * t),
+                    getAy: (t) => -29.4 * Math.sin(0.7 * t),
+                    color: "#84cc16"
+                },
+                {
+                    name: "Rocket Launch",
+                    description: "Accelerates upward, then enters free fall",
+                    getX: (t) => {
+                        if (t < 3) return 50 + 8 * t;
+                        else return 50 + 24 + 8 * (t - 3);
+                    },
+                    getY: (t) => {
+                        if (t < 3) return 20 + 15 * t + 5 * t * t;
+                        else {
+                            const y3 = 20 + 45 + 45;
+                            const vy3 = 15 + 30;
+                            return y3 + vy3 * (t - 3) - 5 * (t - 3) * (t - 3);
+                        }
+                    },
+                    getVx: (t) => 8,
+                    getVy: (t) => {
+                        if (t < 3) return 15 + 10 * t;
+                        else return 45 - 10 * (t - 3);
+                    },
+                    getAx: (t) => 0,
+                    getAy: (t) => {
+                        if (t < 3) return 10;
+                        else return -10;
+                    },
+                    color: "#ef4444"
+                }
+            ];
+            
+            const selectProfile = (index) => {
+                setCurrentProfile(index);
+                setIsPlaying(false);
+                setTime(0);
+                setHistory([]);
+                startTimeRef.current = null;
+            };
+            
+            // Get current profile functions
+            const getX = (t) => {
+                if (currentProfile === null) return 100;
+                return motionProfiles[currentProfile].getX(t);
+            };
+            
+            const getY = (t) => {
+                if (currentProfile === null) return 100;
+                return motionProfiles[currentProfile].getY(t);
+            };
+            
+            const getVx = (t) => {
+                if (currentProfile === null) return 0;
+                return motionProfiles[currentProfile].getVx(t);
+            };
+            
+            const getVy = (t) => {
+                if (currentProfile === null) return 0;
+                return motionProfiles[currentProfile].getVy(t);
+            };
+            
+            const getAx = (t) => {
+                if (currentProfile === null) return 0;
+                return motionProfiles[currentProfile].getAx(t);
+            };
+            
+            const getAy = (t) => {
+                if (currentProfile === null) return 0;
+                return motionProfiles[currentProfile].getAy(t);
+            };
+            
+            // Animation loop
+            useEffect(() => {
+                if (isPlaying && time < duration) {
+                    animationRef.current = requestAnimationFrame((timestamp) => {
+                        if (!startTimeRef.current) startTimeRef.current = timestamp;
+                        const elapsed = (timestamp - startTimeRef.current) / 1000;
+                        
+                        const newTime = Math.min(time + dt, duration);
+                        setTime(newTime);
+                        
+                        // Add to history
+                        setHistory(prev => [...prev, {
+                            time: newTime,
+                            x: getX(newTime),
+                            y: getY(newTime),
+                            vx: getVx(newTime),
+                            vy: getVy(newTime),
+                            ax: getAx(newTime),
+                            ay: getAy(newTime)
+                        }]);
+                        
+                        startTimeRef.current = timestamp;
+                    });
+                } else if (!isPlaying) {
+                    startTimeRef.current = null;
+                }
+                
+                return () => {
+                    if (animationRef.current) {
+                        cancelAnimationFrame(animationRef.current);
+                    }
+                };
+            }, [isPlaying, time]);
+            
+            const handleReset = () => {
+                setIsPlaying(false);
+                setTime(0);
+                setHistory([]);
+                startTimeRef.current = null;
+            };
+            
+            const togglePlay = () => {
+                if (time >= duration) {
+                    handleReset();
+                }
+                setIsPlaying(!isPlaying);
+            };
+            
+            // Current values
+            const currentX = getX(time);
+            const currentY = getY(time);
+            const currentVx = getVx(time);
+            const currentVy = getVy(time);
+            const currentAx = getAx(time);
+            const currentAy = getAy(time);
+            
+            // Graph dimensions
+            const graphWidth = 280;
+            const graphHeight = 100;
+            const margin = { top: 15, right: 20, bottom: 25, left: 45 };
+            const plotWidth = graphWidth - margin.left - margin.right;
+            const plotHeight = graphHeight - margin.top - margin.bottom;
+            
+            // Scaling functions for graphs
+            const scaleTime = (t) => (t / duration) * plotWidth;
+            
+            const scaleX = (x) => {
+                const min = 0;
+                const max = 250;
+                return plotHeight - ((x - min) / (max - min)) * plotHeight;
+            };
+            
+            const scaleY = (y) => {
+                const min = 0;
+                const max = 250;
+                return plotHeight - ((y - min) / (max - min)) * plotHeight;
+            };
+            
+            const scaleV = (v) => {
+                const min = -60;
+                const max = 60;
+                return plotHeight - ((v - min) / (max - min)) * plotHeight;
+            };
+            
+            const scaleA = (a) => {
+                const min = -50;
+                const max = 50;
+                return plotHeight - ((a - min) / (max - min)) * plotHeight;
+            };
+            
+            // Generate path strings for graphs
+            const generatePath = (data, scaleFunc, valueKey) => {
+                if (data.length < 2) return '';
+                return data.map((d, i) => {
+                    const x = scaleTime(d.time);
+                    const y = scaleFunc(d[valueKey]);
+                    return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
+                }).join(' ');
+            };
+            
+            // Render a graph
+            const renderGraph = (title, path, currentValue, scaleFunc, unit, color, yMin, yMax) => {
+                const currentXPos = scaleTime(time);
+                const currentYPos = scaleFunc(currentValue);
+                
+                return (
+                    <div className="bg-white rounded-lg shadow p-2 mb-2">
+                        <h3 className="text-xs font-semibold mb-1 text-center">{title}</h3>
+                        <svg width={graphWidth} height={graphHeight}>
+                            <g transform={`translate(${margin.left},${margin.top})`}>
+                                {/* Grid lines */}
+                                <line x1="0" y1="0" x2="0" y2={plotHeight} stroke="#333" strokeWidth="1.5" />
+                                <line x1="0" y1={plotHeight} x2={plotWidth} y2={plotHeight} stroke="#333" strokeWidth="1.5" />
+                                
+                                {/* Y-axis labels */}
+                                <text x="-35" y="5" fontSize="9" fill="#666">{yMax}{unit}</text>
+                                <text x="-35" y={plotHeight + 5} fontSize="9" fill="#666">{yMin}{unit}</text>
+                                
+                                {/* X-axis labels */}
+                                <text x="-5" y={plotHeight + 18} fontSize="9" fill="#666">0</text>
+                                <text x={plotWidth - 10} y={plotHeight + 18} fontSize="9" fill="#666">{duration}s</text>
+                                
+                                {/* Zero line if applicable */}
+                                {yMin < 0 && yMax > 0 && (
+                                    <line 
+                                        x1="0" 
+                                        y1={scaleFunc(0)} 
+                                        x2={plotWidth} 
+                                        y2={scaleFunc(0)} 
+                                        stroke="#ccc" 
+                                        strokeWidth="1" 
+                                        strokeDasharray="2,2"
+                                    />
+                                )}
+                                
+                                {/* Plot line */}
+                                {path && (
+                                    <path
+                                        d={path}
+                                        fill="none"
+                                        stroke={color}
+                                        strokeWidth="2"
+                                    />
+                                )}
+                                
+                                {/* Current point */}
+                                {history.length > 0 && (
+                                    <circle
+                                        cx={currentXPos}
+                                        cy={currentYPos}
+                                        r="3"
+                                        fill={color}
+                                        stroke="white"
+                                        strokeWidth="1.5"
+                                    />
+                                )}
+                            </g>
+                        </svg>
+                        <div className="text-center text-xs font-mono">
+                            {currentValue.toFixed(1)} {unit}
+                        </div>
+                    </div>
+                );
+            };
+            
+            return (
+                <div className="w-full max-w-7xl mx-auto p-4 bg-gradient-to-br from-blue-50 to-indigo-50">
+                    <div className="bg-white rounded-lg shadow-lg p-4 mb-4">
+                        <h1 className="text-2xl font-bold text-center mb-2 text-indigo-900">
+                            2D Kinematics Visualization
+                        </h1>
+                        <p className="text-center text-gray-600 text-sm">
+                            Watch how x and y components relate in 2D motion
+                        </p>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                        {/* Left side: Animation */}
+                        <div className="lg:col-span-1 bg-white rounded-lg shadow-lg p-4">
+                            <h2 className="text-lg font-semibold mb-3 text-center text-indigo-800">
+                                2D Motion
+                            </h2>
+                            
+                            {/* 2D space */}
+                            <div className="relative bg-gradient-to-br from-sky-100 to-blue-50 rounded-lg mb-3" style={{width: '100%', paddingBottom: '100%'}}>
+                                {/* Coordinate system */}
+                                <svg className="absolute inset-0 w-full h-full" viewBox="0 0 250 250" preserveAspectRatio="xMidYMid meet">
+                                    {/* Grid lines */}
+                                    <defs>
+                                        <pattern id="grid" width="50" height="50" patternUnits="userSpaceOnUse">
+                                            <path d="M 50 0 L 0 0 0 50" fill="none" stroke="#cbd5e1" strokeWidth="0.5"/>
+                                        </pattern>
+                                    </defs>
+                                    <rect width="250" height="250" fill="url(#grid)" />
+                                    
+                                    {/* Axes */}
+                                    <line x1="0" y1="250" x2="250" y2="250" stroke="#334155" strokeWidth="2" />
+                                    <line x1="0" y1="0" x2="0" y2="250" stroke="#334155" strokeWidth="2" />
+                                    
+                                    {/* Axis labels */}
+                                    <text x="245" y="245" fontSize="10" fill="#475569" textAnchor="end">x</text>
+                                    <text x="5" y="10" fontSize="10" fill="#475569">y</text>
+                                    
+                                    {/* Tick marks and labels */}
+                                    {[0, 50, 100, 150, 200, 250].map(val => (
+                                        <g key={`x-${val}`}>
+                                            <line x1={val} y1="250" x2={val} y2="247" stroke="#334155" strokeWidth="1" />
+                                            <text x={val} y="260" fontSize="8" fill="#64748b" textAnchor="middle">{val}</text>
+                                        </g>
+                                    ))}
+                                    {[0, 50, 100, 150, 200, 250].map(val => (
+                                        <g key={`y-${val}`}>
+                                            <line x1="0" y1={250 - val} x2="3" y2={250 - val} stroke="#334155" strokeWidth="1" />
+                                            <text x="-5" y={250 - val + 3} fontSize="8" fill="#64748b" textAnchor="end">{val}</text>
+                                        </g>
+                                    ))}
+                                    
+                                    {/* Trail */}
+                                    {history.length > 1 && (
+                                        <path
+                                            d={history.map((h, i) => 
+                                                `${i === 0 ? 'M' : 'L'} ${h.x} ${250 - h.y}`
+                                            ).join(' ')}
+                                            fill="none"
+                                            stroke={currentProfile !== null ? motionProfiles[currentProfile].color : '#3b82f6'}
+                                            strokeWidth="1.5"
+                                            opacity="0.4"
+                                        />
+                                    )}
+                                    
+                                    {/* Current particle */}
+                                    {currentProfile !== null && (
+                                        <g>
+                                            {/* Velocity arrow (black) - scaled to stay in bounds */}
+                                            {(Math.abs(currentVx) > 0.5 || Math.abs(currentVy) > 0.5) && (() => {
+                                                const scale = 1.2;
+                                                const vxScaled = currentVx * scale;
+                                                const vyScaled = currentVy * scale;
+                                                const endX = currentX + vxScaled;
+                                                const endY = currentY + vyScaled;
+                                                // Clamp to grid bounds
+                                                const clampedEndX = Math.max(5, Math.min(245, endX));
+                                                const clampedEndY = Math.max(5, Math.min(245, endY));
+                                                const length = Math.sqrt((clampedEndX - currentX)**2 + (clampedEndY - currentY)**2);
+                                                // Correct angle calculation - note the sign flip for dy since SVG y increases downward
+                                                const angle = Math.atan2(-(clampedEndY - currentY), clampedEndX - currentX) * 180 / Math.PI;
+                                                
+                                                return length > 3 ? (
+                                                    <g>
+                                                        <line
+                                                            x1={currentX}
+                                                            y1={250 - currentY}
+                                                            x2={clampedEndX}
+                                                            y2={250 - clampedEndY}
+                                                            stroke="#000"
+                                                            strokeWidth="1.5"
+                                                        />
+                                                        {/* Arrowhead */}
+                                                        <polygon
+                                                            points="0,-3 8,0 0,3"
+                                                            fill="#000"
+                                                            transform={`translate(${clampedEndX},${250 - clampedEndY}) rotate(${angle})`}
+                                                        />
+                                                    </g>
+                                                ) : null;
+                                            })()}
+                                            
+                                            {/* Acceleration arrow (red) - scaled to stay in bounds */}
+                                            {(Math.abs(currentAx) > 0.5 || Math.abs(currentAy) > 0.5) && (() => {
+                                                const scale = 1.2;
+                                                const axScaled = currentAx * scale;
+                                                const ayScaled = currentAy * scale;
+                                                const endX = currentX + axScaled;
+                                                const endY = currentY + ayScaled;
+                                                // Clamp to grid bounds
+                                                const clampedEndX = Math.max(5, Math.min(245, endX));
+                                                const clampedEndY = Math.max(5, Math.min(245, endY));
+                                                const length = Math.sqrt((clampedEndX - currentX)**2 + (clampedEndY - currentY)**2);
+                                                // Correct angle calculation - note the sign flip for dy since SVG y increases downward
+                                                const angle = Math.atan2(-(clampedEndY - currentY), clampedEndX - currentX) * 180 / Math.PI;
+                                                
+                                                return length > 3 ? (
+                                                    <g>
+                                                        <line
+                                                            x1={currentX}
+                                                            y1={250 - currentY}
+                                                            x2={clampedEndX}
+                                                            y2={250 - clampedEndY}
+                                                            stroke="#ef4444"
+                                                            strokeWidth="1.5"
+                                                        />
+                                                        {/* Arrowhead */}
+                                                        <polygon
+                                                            points="0,-3 8,0 0,3"
+                                                            fill="#ef4444"
+                                                            transform={`translate(${clampedEndX},${250 - clampedEndY}) rotate(${angle})`}
+                                                        />
+                                                    </g>
+                                                ) : null;
+                                            })()}
+                                            
+                                            {/* Particle */}
+                                            <circle
+                                                cx={currentX}
+                                                cy={250 - currentY}
+                                                r="4"
+                                                fill={motionProfiles[currentProfile].color}
+                                                stroke="white"
+                                                strokeWidth="1.5"
+                                            />
+                                        </g>
+                                    )}
+                                </svg>
+                            </div>
+                            
+                            {/* Info display */}
+                            {currentProfile !== null && (
+                                <div className="bg-gray-50 rounded p-2 text-xs font-mono mb-3">
+                                    <div className="font-semibold mb-1 text-indigo-900">{motionProfiles[currentProfile].name}</div>
+                                    <div className="text-gray-600 text-xs mb-2">{motionProfiles[currentProfile].description}</div>
+                                    <div className="grid grid-cols-2 gap-1 text-xs">
+                                        <div>t: {time.toFixed(2)}s</div>
+                                        <div className="text-blue-600">x: {currentX.toFixed(1)}m</div>
+                                        <div className="text-blue-600">y: {currentY.toFixed(1)}m</div>
+                                        <div className="text-green-600">vₓ: {currentVx.toFixed(1)}m/s</div>
+                                        <div className="text-green-600">vᵧ: {currentVy.toFixed(1)}m/s</div>
+                                        <div className="text-purple-600">aₓ: {currentAx.toFixed(1)}m/s²</div>
+                                        <div className="text-purple-600">aᵧ: {currentAy.toFixed(1)}m/s²</div>
+                                    </div>
+                                </div>
+                            )}
+                            
+                            {/* Controls */}
+                            <div className="flex justify-center gap-2 mb-3">
+                                <button
+                                    onClick={togglePlay}
+                                    disabled={currentProfile === null}
+                                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-semibold shadow text-sm disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                >
+                                    {isPlaying ? <Pause size={16} /> : <Play size={16} />}
+                                    {isPlaying ? 'Pause' : time >= duration ? 'Restart' : 'Play'}
+                                </button>
+                                <button
+                                    onClick={handleReset}
+                                    disabled={currentProfile === null}
+                                    className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-semibold shadow text-sm disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                >
+                                    <RotateCcw size={16} />
+                                    Reset
+                                </button>
+                            </div>
+                            
+                            {/* Profile Selection */}
+                            <div className="border-t pt-3">
+                                <h3 className="text-xs font-semibold text-gray-700 mb-2 text-center">Select Motion:</h3>
+                                <div className="grid grid-cols-2 gap-1.5">
+                                    {motionProfiles.map((profile, index) => (
+                                        <button
+                                            key={index}
+                                            onClick={() => selectProfile(index)}
+                                            className={`px-2 py-1.5 text-xs rounded transition-all ${
+                                                currentProfile === index
+                                                    ? 'font-semibold shadow-md'
+                                                    : 'bg-gray-100 hover:bg-gray-200'
+                                            }`}
+                                            style={{
+                                                backgroundColor: currentProfile === index ? profile.color : undefined,
+                                                color: currentProfile === index ? 'white' : '#374151'
+                                            }}
+                                        >
+                                            {profile.name}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            
+                            <div className="mt-3 p-2 bg-gray-50 rounded border border-gray-200">
+                                <div className="font-semibold text-xs text-gray-700 mb-1">Arrow Key:</div>
+                                <div className="flex gap-4 text-xs">
+                                    <div className="flex items-center gap-1">
+                                        <div className="w-6 h-0.5 bg-black"></div>
+                                        <span className="text-gray-600">Velocity</span>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                        <div className="w-6 h-0.5 bg-red-500"></div>
+                                        <span className="text-gray-600">Accel.</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        {/* Middle: X-component graphs */}
+                        <div className="lg:col-span-1">
+                            <h2 className="text-lg font-semibold mb-2 text-center text-indigo-800">
+                                X-Component Graphs
+                            </h2>
+                            
+                            {currentProfile !== null && (
+                                <>
+                                    {renderGraph(
+                                        'X-Position vs Time',
+                                        generatePath(history, scaleX, 'x'),
+                                        currentX,
+                                        scaleX,
+                                        ' m',
+                                        motionProfiles[currentProfile].color,
+                                        0,
+                                        250
+                                    )}
+                                    
+                                    {renderGraph(
+                                        'X-Velocity vs Time',
+                                        generatePath(history, scaleV, 'vx'),
+                                        currentVx,
+                                        scaleV,
+                                        ' m/s',
+                                        motionProfiles[currentProfile].color,
+                                        -60,
+                                        60
+                                    )}
+                                    
+                                    {renderGraph(
+                                        'X-Acceleration vs Time',
+                                        generatePath(history, scaleA, 'ax'),
+                                        currentAx,
+                                        scaleA,
+                                        ' m/s²',
+                                        motionProfiles[currentProfile].color,
+                                        -50,
+                                        50
+                                    )}
+                                </>
+                            )}
+                            
+                            {currentProfile === null && (
+                                <div className="text-center text-gray-500 mt-20">
+                                    Select a motion profile to begin
+                                </div>
+                            )}
+                        </div>
+                        
+                        {/* Right: Y-component graphs */}
+                        <div className="lg:col-span-1">
+                            <h2 className="text-lg font-semibold mb-2 text-center text-indigo-800">
+                                Y-Component Graphs
+                            </h2>
+                            
+                            {currentProfile !== null && (
+                                <>
+                                    {renderGraph(
+                                        'Y-Position vs Time',
+                                        generatePath(history, scaleY, 'y'),
+                                        currentY,
+                                        scaleY,
+                                        ' m',
+                                        motionProfiles[currentProfile].color,
+                                        0,
+                                        250
+                                    )}
+                                    
+                                    {renderGraph(
+                                        'Y-Velocity vs Time',
+                                        generatePath(history, scaleV, 'vy'),
+                                        currentVy,
+                                        scaleV,
+                                        ' m/s',
+                                        motionProfiles[currentProfile].color,
+                                        -60,
+                                        60
+                                    )}
+                                    
+                                    {renderGraph(
+                                        'Y-Acceleration vs Time',
+                                        generatePath(history, scaleA, 'ay'),
+                                        currentAy,
+                                        scaleA,
+                                        ' m/s²',
+                                        motionProfiles[currentProfile].color,
+                                        -50,
+                                        50
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // Render the app
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<Kinematics2D />);
+    </script>
+</body>
+</html>
