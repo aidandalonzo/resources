@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>1D Kinematics Visualization</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+                'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+                sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // Lucide icons as inline SVG components
+        const Play = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+        );
+
+        const Pause = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="6" y="4" width="4" height="16"></rect>
+                <rect x="14" y="4" width="4" height="16"></rect>
+            </svg>
+        );
+
+        const RotateCcw = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="1 4 1 10 7 10"></polyline>
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+            </svg>
+        );
+
+        const KinematicsSimulation = () => {
+            const [isPlaying, setIsPlaying] = useState(false);
+            const [time, setTime] = useState(0);
+            const [history, setHistory] = useState([]);
+            const [currentProfile, setCurrentProfile] = useState(null);
+            const animationRef = useRef(null);
+            const startTimeRef = useRef(null);
+            
+            // Simulation parameters
+            const duration = 10; // seconds
+            const dt = 0.016; // ~60fps
+            
+            // Define multiple motion profiles - adjusted to stay within 0-200m range
+            const motionProfiles = [
+                {
+                    name: "Oscillating with Drift",
+                    description: "Sinusoidal motion with constant positive velocity component",
+                    // x(t) = 60 + 30*sin(0.5*t) + 8*t
+                    getPosition: (t) => 60 + 30 * Math.sin(0.5 * t) + 8 * t,
+                    getVelocity: (t) => 15 * Math.cos(0.5 * t) + 8,
+                    getAcceleration: (t) => -7.5 * Math.sin(0.5 * t),
+                    color: "#3b82f6"
+                },
+                {
+                    name: "Constant Acceleration",
+                    description: "Starting from rest with uniform acceleration (like dropping)",
+                    // x(t) = 40 + 1.6*t²  (at t=10: x = 40 + 160 = 200)
+                    getPosition: (t) => 40 + 1.6 * t * t,
+                    getVelocity: (t) => 3.2 * t,
+                    getAcceleration: (t) => 3.2,
+                    color: "#10b981"
+                },
+                {
+                    name: "Speeding Up Then Slowing",
+                    description: "Quadratic acceleration profile (like a car accelerating then braking)",
+                    // x(t) = 40 + 12*t + 2*t² - 0.2*t³
+                    getPosition: (t) => 40 + 12 * t + 2 * t * t - 0.2 * t * t * t,
+                    getVelocity: (t) => 12 + 4 * t - 0.6 * t * t,
+                    getAcceleration: (t) => 4 - 1.2 * t,
+                    color: "#8b5cf6"
+                },
+                {
+                    name: "Damped Oscillation",
+                    description: "Oscillation with decreasing amplitude (like a pendulum with friction)",
+                    // x(t) = 100 + 40*exp(-0.15*t)*sin(t)
+                    getPosition: (t) => 100 + 40 * Math.exp(-0.15 * t) * Math.sin(t),
+                    getVelocity: (t) => 40 * Math.exp(-0.15 * t) * (Math.cos(t) - 0.15 * Math.sin(t)),
+                    getAcceleration: (t) => 40 * Math.exp(-0.15 * t) * (-Math.sin(t) - 0.3 * Math.cos(t) + 0.0225 * Math.sin(t)),
+                    color: "#f59e0b"
+                },
+                {
+                    name: "Back and Forth",
+                    description: "Simple harmonic motion centered at a point",
+                    // x(t) = 100 + 35*sin(0.8*t)
+                    getPosition: (t) => 100 + 35 * Math.sin(0.8 * t),
+                    getVelocity: (t) => 28 * Math.cos(0.8 * t),
+                    getAcceleration: (t) => -22.4 * Math.sin(0.8 * t),
+                    color: "#ec4899"
+                },
+                {
+                    name: "Constant Velocity",
+                    description: "Uniform motion - no acceleration",
+                    // x(t) = 30 + 15*t
+                    getPosition: (t) => 30 + 15 * t,
+                    getVelocity: (t) => 15,
+                    getAcceleration: (t) => 0,
+                    color: "#06b6d4"
+                },
+                {
+                    name: "Increasing Acceleration",
+                    description: "Acceleration grows linearly with time",
+                    // x(t) = 70 + 5*t + 0.125*t³  (at t=10: x = 70 + 50 + 125 = 195)
+                    getPosition: (t) => 70 + 5 * t + 0.125 * t * t * t,
+                    getVelocity: (t) => 5 + 0.375 * t * t,
+                    getAcceleration: (t) => 0.75 * t,
+                    color: "#84cc16"
+                },
+                {
+                    name: "Stopping Motion",
+                    description: "Object slows down and comes to rest",
+                    // x(t) = 40 + 30*t - 3*t²
+                    getPosition: (t) => 40 + 30 * t - 3 * t * t,
+                    getVelocity: (t) => 30 - 6 * t,
+                    getAcceleration: (t) => -6,
+                    color: "#ef4444"
+                }
+            ];
+            
+            // Get current profile functions
+            const getPosition = (t) => {
+                if (currentProfile === null) return 100;
+                return motionProfiles[currentProfile].getPosition(t);
+            };
+            
+            const getVelocity = (t) => {
+                if (currentProfile === null) return 0;
+                return motionProfiles[currentProfile].getVelocity(t);
+            };
+            
+            const getAcceleration = (t) => {
+                if (currentProfile === null) return 0;
+                return motionProfiles[currentProfile].getAcceleration(t);
+            };
+            
+            const selectProfile = (index) => {
+                setCurrentProfile(index);
+                setIsPlaying(false);
+                setTime(0);
+                setHistory([]);
+                startTimeRef.current = null;
+            };
+            
+            // Animation loop
+            useEffect(() => {
+                if (isPlaying && time < duration) {
+                    animationRef.current = requestAnimationFrame((timestamp) => {
+                        if (!startTimeRef.current) startTimeRef.current = timestamp;
+                        const elapsed = (timestamp - startTimeRef.current) / 1000;
+                        
+                        const newTime = Math.min(time + dt, duration);
+                        setTime(newTime);
+                        
+                        // Add to history
+                        setHistory(prev => [...prev, {
+                            time: newTime,
+                            position: getPosition(newTime),
+                            velocity: getVelocity(newTime),
+                            acceleration: getAcceleration(newTime)
+                        }]);
+                        
+                        startTimeRef.current = timestamp;
+                    });
+                } else if (!isPlaying) {
+                    startTimeRef.current = null;
+                }
+                
+                return () => {
+                    if (animationRef.current) {
+                        cancelAnimationFrame(animationRef.current);
+                    }
+                };
+            }, [isPlaying, time]);
+            
+            const handleReset = () => {
+                setIsPlaying(false);
+                setTime(0);
+                setHistory([]);
+                startTimeRef.current = null;
+            };
+            
+            const togglePlay = () => {
+                if (time >= duration) {
+                    handleReset();
+                }
+                setIsPlaying(!isPlaying);
+            };
+            
+            // Current values
+            const currentPos = getPosition(time);
+            const currentVel = getVelocity(time);
+            const currentAcc = getAcceleration(time);
+            
+            // Graph dimensions
+            const graphWidth = 280;
+            const graphHeight = 140;
+            const margin = { top: 20, right: 20, bottom: 30, left: 50 };
+            const plotWidth = graphWidth - margin.left - margin.right;
+            const plotHeight = graphHeight - margin.top - margin.bottom;
+            
+            // Scaling functions for graphs
+            const scaleTime = (t) => (t / duration) * plotWidth;
+            const scalePosition = (p) => {
+                const min = 0;
+                const max = 200;
+                return plotHeight - ((p - min) / (max - min)) * plotHeight;
+            };
+            const scaleVelocity = (v) => {
+                const min = -15;
+                const max = 35;
+                return plotHeight - ((v - min) / (max - min)) * plotHeight;
+            };
+            const scaleAcceleration = (a) => {
+                const min = -12;
+                const max = 12;
+                return plotHeight - ((a - min) / (max - min)) * plotHeight;
+            };
+            
+            // Generate path strings for graphs
+            const generatePath = (data, scaleY, valueKey) => {
+                if (data.length < 2) return '';
+                return data.map((d, i) => {
+                    const x = scaleTime(d.time);
+                    const y = scaleY(d[valueKey]);
+                    return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
+                }).join(' ');
+            };
+            
+            // Render a graph
+            const renderGraph = (title, path, currentValue, scaleY, unit, color, yMin, yMax) => {
+                const currentX = scaleTime(time);
+                const currentY = scaleY(currentValue);
+                
+                return (
+                    <div className="bg-white rounded-lg shadow p-3 mb-3">
+                        <h3 className="text-sm font-semibold mb-2 text-center">{title}</h3>
+                        <svg width={graphWidth} height={graphHeight}>
+                            <g transform={`translate(${margin.left},${margin.top})`}>
+                                {/* Grid lines */}
+                                <line x1="0" y1="0" x2="0" y2={plotHeight} stroke="#333" strokeWidth="1.5" />
+                                <line x1="0" y1={plotHeight} x2={plotWidth} y2={plotHeight} stroke="#333" strokeWidth="1.5" />
+                                
+                                {/* Y-axis labels */}
+                                <text x="-35" y="5" fontSize="10" fill="#666">{yMax}{unit}</text>
+                                <text x="-35" y={plotHeight + 5} fontSize="10" fill="#666">{yMin}{unit}</text>
+                                <text x="-35" y={plotHeight/2 + 5} fontSize="10" fill="#666">
+                                    {((yMax + yMin) / 2).toFixed(0)}{unit}
+                                </text>
+                                
+                                {/* X-axis labels */}
+                                <text x="-5" y={plotHeight + 20} fontSize="10" fill="#666">0</text>
+                                <text x={plotWidth - 10} y={plotHeight + 20} fontSize="10" fill="#666">{duration}s</text>
+                                
+                                {/* Zero line if applicable */}
+                                {yMin < 0 && yMax > 0 && (
+                                    <line 
+                                        x1="0" 
+                                        y1={scaleY(0)} 
+                                        x2={plotWidth} 
+                                        y2={scaleY(0)} 
+                                        stroke="#ccc" 
+                                        strokeWidth="1" 
+                                        strokeDasharray="2,2"
+                                    />
+                                )}
+                                
+                                {/* Plot line */}
+                                {path && (
+                                    <path
+                                        d={path}
+                                        fill="none"
+                                        stroke={color}
+                                        strokeWidth="2"
+                                    />
+                                )}
+                                
+                                {/* Current point */}
+                                {history.length > 0 && (
+                                    <circle
+                                        cx={currentX}
+                                        cy={currentY}
+                                        r="4"
+                                        fill={color}
+                                        stroke="white"
+                                        strokeWidth="2"
+                                    />
+                                )}
+                            </g>
+                        </svg>
+                        <div className="text-center text-sm font-mono mt-1">
+                            {currentValue.toFixed(1)} {unit}
+                        </div>
+                    </div>
+                );
+            };
+            
+            return (
+                <div className="w-full max-w-6xl mx-auto p-6 bg-gradient-to-br from-blue-50 to-indigo-50">
+                    <div className="bg-white rounded-lg shadow-lg p-6 mb-4">
+                        <h1 className="text-2xl font-bold text-center mb-2 text-indigo-900">
+                            1D Kinematics Visualization
+                        </h1>
+                        <p className="text-center text-gray-600 text-sm mb-4">
+                            Watch how position, velocity, and acceleration relate as the particle moves
+                        </p>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {/* Left side: Animation */}
+                        <div className="bg-white rounded-lg shadow-lg p-6">
+                            <h2 className="text-xl font-semibold mb-4 text-center text-indigo-800">
+                                Motion Animation
+                            </h2>
+                            
+                            {/* 1D landscape */}
+                            <div className="relative bg-gradient-to-b from-sky-200 to-green-100 rounded-lg p-4 mb-4" style={{height: '400px'}}>
+                                {/* Reference line */}
+                                <div className="absolute bottom-20 left-4 right-4 h-0.5 bg-gray-800"></div>
+                                
+                                {/* Distance markers */}
+                                <div className="absolute bottom-20 left-4 right-4">
+                                    {[0, 50, 100, 150, 200].map(pos => {
+                                        const left = (pos / 200) * 100;
+                                        return (
+                                            <div key={pos} className="absolute" style={{left: `${left}%`}}>
+                                                <div className="w-0.5 h-3 bg-gray-800 -translate-x-1/2"></div>
+                                                <div className="text-xs text-gray-700 -translate-x-1/2 mt-1">{pos}m</div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                                
+                                {/* Current particle */}
+                                <div
+                                    className="absolute w-6 h-6 bg-indigo-600 rounded-full shadow-lg transition-all duration-75"
+                                    style={{
+                                        left: `calc(${(currentPos / 200) * 100}% + 1rem)`,
+                                        bottom: '72px',
+                                        transform: 'translate(-50%, 0)',
+                                        boxShadow: '0 0 20px rgba(79, 70, 229, 0.6)'
+                                    }}
+                                >
+                                    {/* Velocity arrow (black) - starts from particle center */}
+                                    {Math.abs(currentVel) > 1 && (
+                                        <div
+                                            className="absolute"
+                                            style={{
+                                                left: '50%',
+                                                top: '50%',
+                                                width: `${Math.abs(currentVel) * 2.5}px`,
+                                                height: '2px',
+                                                backgroundColor: '#000',
+                                                transform: currentVel > 0 ? 'translate(0, -50%)' : 'translate(-100%, -50%)',
+                                                transformOrigin: currentVel > 0 ? 'left center' : 'right center'
+                                            }}
+                                        >
+                                            {/* Arrowhead at the end of the vector */}
+                                            <div
+                                                className="absolute w-0 h-0"
+                                                style={{
+                                                    right: currentVel > 0 ? '-8px' : 'auto',
+                                                    left: currentVel > 0 ? 'auto' : '-8px',
+                                                    top: '50%',
+                                                    transform: 'translateY(-50%)',
+                                                    borderTop: '5px solid transparent',
+                                                    borderBottom: '5px solid transparent',
+                                                    borderLeft: currentVel > 0 ? '10px solid #000' : 'none',
+                                                    borderRight: currentVel > 0 ? 'none' : '10px solid #000'
+                                                }}
+                                            />
+                                        </div>
+                                    )}
+                                    
+                                    {/* Acceleration arrow (red) - offset below particle */}
+                                    {Math.abs(currentAcc) > 0.5 && (
+                                        <div
+                                            className="absolute"
+                                            style={{
+                                                left: '50%',
+                                                top: '100%',
+                                                marginTop: '6px',
+                                                width: `${Math.abs(currentAcc) * 3.5}px`,
+                                                height: '2px',
+                                                backgroundColor: '#ef4444',
+                                                transform: currentAcc > 0 ? 'translate(0, 0)' : 'translate(-100%, 0)',
+                                                transformOrigin: currentAcc > 0 ? 'left center' : 'right center'
+                                            }}
+                                        >
+                                            {/* Arrowhead at the end of the vector */}
+                                            <div
+                                                className="absolute w-0 h-0"
+                                                style={{
+                                                    right: currentAcc > 0 ? '-8px' : 'auto',
+                                                    left: currentAcc > 0 ? 'auto' : '-8px',
+                                                    top: '50%',
+                                                    transform: 'translateY(-50%)',
+                                                    borderTop: '5px solid transparent',
+                                                    borderBottom: '5px solid transparent',
+                                                    borderLeft: currentAcc > 0 ? '10px solid #ef4444' : 'none',
+                                                    borderRight: currentAcc > 0 ? 'none' : '10px solid #ef4444'
+                                                }}
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+                                
+                            {/* Info display */}
+                                <div className="absolute top-4 left-4 bg-white bg-opacity-90 rounded p-3 text-sm font-mono">
+                                    <div className="font-semibold mb-2 text-indigo-900">Current Values:</div>
+                                    <div>Time: {time.toFixed(2)} s</div>
+                                    <div className="text-blue-600">Position: {currentPos.toFixed(1)} m</div>
+                                    <div className="text-green-600">Velocity: {currentVel.toFixed(1)} m/s</div>
+                                    <div className="text-purple-600">Accel: {currentAcc.toFixed(1)} m/s²</div>
+                                </div>
+                                
+                                {/* Profile display */}
+                                {currentProfile !== null && (
+                                    <div className="absolute top-4 right-4 bg-white bg-opacity-90 rounded p-3 text-sm max-w-xs">
+                                        <div className="font-semibold text-indigo-900 mb-1">
+                                            {motionProfiles[currentProfile].name}
+                                        </div>
+                                        <div className="text-xs text-gray-600">
+                                            {motionProfiles[currentProfile].description}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                            
+                            {/* Controls */}
+                            <div className="flex justify-center gap-3 mb-4">
+                                <button
+                                    onClick={togglePlay}
+                                    disabled={currentProfile === null}
+                                    className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-semibold shadow disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                >
+                                    {isPlaying ? <Pause size={20} /> : <Play size={20} />}
+                                    {isPlaying ? 'Pause' : time >= duration ? 'Restart' : 'Play'}
+                                </button>
+                                <button
+                                    onClick={handleReset}
+                                    disabled={currentProfile === null}
+                                    className="flex items-center gap-2 px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-semibold shadow disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                >
+                                    <RotateCcw size={20} />
+                                    Reset
+                                </button>
+                            </div>
+                            
+                            {/* Profile Selection Buttons */}
+                            <div className="border-t pt-4">
+                                <h3 className="text-sm font-semibold text-gray-700 mb-2 text-center">Select Motion Profile:</h3>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {motionProfiles.map((profile, index) => (
+                                        <button
+                                            key={index}
+                                            onClick={() => selectProfile(index)}
+                                            className={`px-3 py-2 text-sm rounded-lg transition-all ${
+                                                currentProfile === index
+                                                    ? 'font-semibold shadow-md'
+                                                    : 'bg-gray-100 hover:bg-gray-200'
+                                            }`}
+                                            style={{
+                                                backgroundColor: currentProfile === index ? profile.color : undefined,
+                                                color: currentProfile === index ? 'white' : '#374151'
+                                            }}
+                                        >
+                                            {profile.name}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            
+                            <div className="mt-4 p-3 bg-gray-50 rounded border border-gray-200">
+                                <div className="font-semibold text-sm text-gray-700 mb-2">Arrow Key:</div>
+                                <div className="flex gap-6 text-sm">
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-8 h-0.5 bg-black"></div>
+                                        <span className="text-gray-600">Velocity</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-8 h-0.5 bg-red-500"></div>
+                                        <span className="text-gray-600">Acceleration</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        {/* Right side: Graphs */}
+                        <div>
+                            <h2 className="text-xl font-semibold mb-4 text-center text-indigo-800">
+                                Kinematic Graphs
+                            </h2>
+                            
+                            {currentProfile !== null && (
+                                <>
+                                    {renderGraph(
+                                        'Position vs Time',
+                                        generatePath(history, scalePosition, 'position'),
+                                        currentPos,
+                                        scalePosition,
+                                        ' m',
+                                        motionProfiles[currentProfile].color,
+                                        0,
+                                        200
+                                    )}
+                                    
+                                    {renderGraph(
+                                        'Velocity vs Time',
+                                        generatePath(history, scaleVelocity, 'velocity'),
+                                        currentVel,
+                                        scaleVelocity,
+                                        ' m/s',
+                                        motionProfiles[currentProfile].color,
+                                        -15,
+                                        35
+                                    )}
+                                    
+                                    {renderGraph(
+                                        'Acceleration vs Time',
+                                        generatePath(history, scaleAcceleration, 'acceleration'),
+                                        currentAcc,
+                                        scaleAcceleration,
+                                        ' m/s²',
+                                        motionProfiles[currentProfile].color,
+                                        -12,
+                                        12
+                                    )}
+                                </>
+                            )}
+                            
+                            <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg p-4 text-sm">
+                                <h3 className="font-semibold mb-2 text-indigo-900">Key Observations:</h3>
+                                <ul className="space-y-1 text-gray-700">
+                                    <li>• Position graph shows <em>where</em> the particle is</li>
+                                    <li>• Velocity graph slope matches acceleration value</li>
+                                    <li>• Position graph slope matches velocity value</li>
+                                    <li>• When velocity = 0, position has a turning point</li>
+                                    <li>• When acceleration = 0, velocity is constant</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // Render the app
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<KinematicsSimulation />);
+    </script>
+</body>
+</html>
